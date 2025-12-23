@@ -1,0 +1,41 @@
+import SimpleITK as sitk
+from pathlib import Path
+
+def resample_image(img_path, target_spacing=(1.0, 1.0, 1.0), is_label=False):
+    img = sitk.ReadImage(str(img_path))
+
+    # ---- 4D 处理（你已有的逻辑）----
+    if img.GetDimension() == 4:
+        size = list(img.GetSize())
+        extractor = sitk.ExtractImageFilter()
+        extractor.SetSize(size[:3] + [0])
+        extractor.SetIndex([0, 0, 0, 0])
+        img = extractor.Execute(img)
+
+    original_spacing = img.GetSpacing()
+    original_size = img.GetSize()
+
+    new_size = [
+        int(round(original_size[i] * original_spacing[i] / target_spacing[i]))
+        for i in range(3)
+    ]
+
+    # ---- 构造 reference image（关键）----
+    reference = sitk.Image(new_size, img.GetPixelID())
+    reference.SetSpacing(target_spacing)
+    reference.SetOrigin(img.GetOrigin())
+    reference.SetDirection(img.GetDirection())
+
+    resampler = sitk.ResampleImageFilter()
+    resampler.SetReferenceImage(reference)
+
+    if is_label:
+        resampler.SetInterpolator(sitk.sitkNearestNeighbor)
+    else:
+        resampler.SetInterpolator(sitk.sitkBSpline)
+
+    return resampler.Execute(img)
+
+def save_image(img, out_path: Path):
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sitk.WriteImage(img, str(out_path))
