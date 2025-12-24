@@ -40,7 +40,7 @@ brain_mri_classification/
 
 在原始数据中，每个文件夹（代表某患者的某一次检查）的结尾都是一串数字，这个数字可以对这次检查做唯一标识，即使是同一个人的两次检查，也应该当成两个数据（case），因为其情况是会发生变化的。为了避免繁琐的ID，采用001、002等三位数字重新标识每一个case，1、2、3、4、5标识MRI序列种类，例如，脑膜炎的第一个case中检测到T1WI.nii、T2WI.nii、FLAIR.nii，那么应该在/data/1_meningitis/1中添加case_001_1.nii.gz，在/data/1_meningitis/2中添加case_001_2.nii.gz，在/data/1_meningitis/3中添加case_001_3.nii.gz。
 
-为了数据的统一性，实现了对.nii的重采样和归一化，分别在utils/resample.py和utils/intensity.py。
+为了数据的统一性，实现了对.nii的重采样、归一化和统一尺寸，分别在utils/resample.py、utils/intensity.py和spatial.py。
 
 运行脚本
 ```bash
@@ -49,7 +49,7 @@ python -m scripts.preprocess_data
 
 如果实现正确，期望的存储结构如下
 ```text
-data/processed
+./data/processed
     ├── 0_normal/
     │   ├── 1/  # T1WI
     │   ├── 2/  # T2WI
@@ -67,3 +67,37 @@ data/processed
 
 ## 生成数据集
 下一步是根据预处理之后的数据生成dataset，存储在dataset目录下。存储tensor的文件后缀暂定为.pt，后续可以根据需求，升级为HDF5 / LMDB等。
+
+在utils/dataset.py中，定义了和将MRI图像转化为tensor有关的函数，这些函数在scripts/build_dataset.py脚本被调用。
+
+运行脚本
+```bash
+python -m scripts.build_dataset
+```
+
+如果脚本运行正常，应该会在datasets目录下生成五个子目录seq1_T1、seq2_T2、seq3_FLAIR、seq4_DWI肯seq5_+C。每个目录下都有三个文件，分别是train.pt，表示训练数据的张量；test.pt，表示测试数据的张量；json文件，记录训练集和测试集是怎么划分的，保证的项目的可复现性。
+
+期望的结构如下
+```text
+./datasets/
+├── seq1_T1
+│   ├── split_seed42.json
+│   ├── test.pt
+│   └── train.pt
+├── seq2_T2
+│   ├── split_seed42.json
+│   ├── test.pt
+│   └── train.pt
+├── seq3_FLAIR
+│   ├── split_seed42.json
+│   ├── test.pt
+│   └── train.pt
+├── seq4_DWI
+│   ├── split_seed42.json
+│   ├── test.pt
+│   └── train.pt
+└── seq5_+C
+    ├── split_seed42.json
+    ├── test.pt
+    └── train.pt
+```

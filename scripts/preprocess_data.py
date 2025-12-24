@@ -1,3 +1,6 @@
+'''
+数据预处理，实现重采样、归一化和裁剪/填充
+'''
 import argparse
 import shutil
 from pathlib import Path
@@ -10,7 +13,9 @@ from utils.data_scan import collect_cases
 from utils.io import load_index, save_index, INDEX_FILE_NAME
 from utils.resample import resample_image, save_image
 from utils.intensity import normalize_intensity
+from utils.spatial import center_crop_or_pad
 
+TARGET_SHAPE = (160, 192, 160)  # (D, H, W)
 
 def main(args):
     raw_root = Path(args.raw_root).resolve()
@@ -72,11 +77,13 @@ def main(args):
                 resampled_img = resample_image(nii_file, target_spacing=(1.0,1.0,1.0), is_label=False)
                 normalized_img = normalize_intensity(resampled_img)
 
+                fixed_img = center_crop_or_pad(normalized_img, TARGET_SHAPE)
+
                 out_name = f"case_{case_id}_{seq_id}.nii.gz"
                 out_path = out_root / label_name / str(seq_id) / out_name
 
                 if not out_path.exists():
-                    save_image(normalized_img, out_path)
+                    save_image(fixed_img, out_path)
 
     # ===== 处理脑膜炎 =====
     meningitis_cases = collect_cases(meningitis_dirs)
