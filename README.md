@@ -68,14 +68,14 @@ python -m scripts.preprocess_data
 ## 生成数据集
 下一步是根据预处理之后的数据生成dataset，存储在dataset目录下。存储tensor的文件后缀暂定为.pt，后续可以根据需求，升级为HDF5 / LMDB等。
 
-在utils/dataset.py中，定义了和将MRI图像转化为tensor有关的函数，这些函数在scripts/build_dataset.py脚本被调用。
+在utils/dataset.py中，定义了和将MRI图像转化为tensor有关的函数，这些函数在scripts/build_dataset.py脚本被调用。脚本的目标是将每个序列按8:1:1划分为训练集、验证集和测试集。
 
 运行脚本
 ```bash
 python -m scripts.build_dataset
 ```
 
-如果脚本运行正常，应该会在datasets目录下生成五个子目录seq1_T1、seq2_T2、seq3_FLAIR、seq4_DWI肯seq5_+C。每个目录下都有三个文件，分别是train.pt，表示训练数据的张量；test.pt，表示测试数据的张量；json文件，记录训练集和测试集是怎么划分的，保证的项目的可复现性。
+如果脚本运行正常，应该会在datasets目录下生成五个子目录seq1_T1、seq2_T2、seq3_FLAIR、seq4_DWI肯seq5_+C。每个目录下都有四个文件，分别是train.pt，表示训练数据的张量；val.pt，表示验证数据的张量；test.pt，表示测试数据的张量；json文件，记录训练集和测试集是怎么划分的，保证的项目的可复现性。
 
 期望的结构如下
 ```text
@@ -83,21 +83,69 @@ python -m scripts.build_dataset
 ├── seq1_T1
 │   ├── split_seed42.json
 │   ├── test.pt
-│   └── train.pt
+│   ├── train.pt
+│   └── val.pt
 ├── seq2_T2
 │   ├── split_seed42.json
 │   ├── test.pt
-│   └── train.pt
+│   ├── train.pt
+│   └── val.pt
 ├── seq3_FLAIR
 │   ├── split_seed42.json
 │   ├── test.pt
-│   └── train.pt
+│   ├── train.pt
+│   └── val.pt
 ├── seq4_DWI
 │   ├── split_seed42.json
 │   ├── test.pt
-│   └── train.pt
+│   ├── train.pt
+│   └── val.pt
 └── seq5_+C
     ├── split_seed42.json
     ├── test.pt
-    └── train.pt
+    ├── train.pt
+    └── val.pt
 ```
+
+## 训练模型
+训练模型主要涉及三个文件train.py、configs/train_config.py和models/cnn3d.py。其中，train.py是训练脚本的入口，configs/train_config.py定义了数据路径、输出路径和训练超参数等数据，models/cnn3d.py定义了模型的结构。当然，这个结构不是一成不变的，后续可能添加其他的模型文件，将train.py中的cnn3d替换就行了。
+
+默认的输入路径是datasets/seq..，输出路径是checkpoints/seq..。运行脚本
+```bash
+python train.py --seq 1
+```
+或
+```bash
+bash  train_command.sh
+```
+train_command.sh可以自由编辑，例如
+```bash
+python train.py --seq 1
+# python tarin.py --seq 2
+python train.py --seq 3
+python train.py --seq 4
+python train.py --seq 5
+```
+
+训练完成后，应该可以在checkpoints目录下看到输出文件
+```text
+./checkpoints/
+├── seq1_T1
+│   ├── model_best.pth
+│   └── model_final.pth
+├── seq2_T2
+│   ├── model_best.pth
+│   └── model_final.pth
+├── seq3_FLAIR
+│   ├── model_best.pth
+│   └── model_final.pth
+├── seq4_DWI
+│   ├── model_best.pth
+│   └── model_final.pth
+└── seq5_+C
+    ├── model_best.pth
+    └── model_final.pth
+```
+
+## 当前使用模型
+cnn3d.py->Simple3DCNN

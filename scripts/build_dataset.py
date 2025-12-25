@@ -9,10 +9,6 @@ import torch
 from utils.dataset import *
 
 
-TRAIN_RATIO = 0.8
-RANDOM_SEED = 42
-
-
 # ================== 主流程 ==================
 def main():
     random.seed(RANDOM_SEED)
@@ -30,12 +26,17 @@ def main():
             print("  [SKIP] No cases found.")
             continue
 
-        split_idx = int(len(all_cases) * TRAIN_RATIO)
-        train_cases = all_cases[:split_idx]
-        test_cases = all_cases[split_idx:]
+        n_total = len(all_cases)
+        n_train = int(n_total * TRAIN_RATIO)
+        n_val = int(n_total * VAL_RATIO)
+
+        train_cases = all_cases[:n_train]
+        val_cases = all_cases[n_train : n_train + n_val]
+        test_cases = all_cases[n_train + n_val:]
 
         # 构建数据集
         train_dataset = build_dataset(train_cases)
+        val_dataset = build_dataset(val_cases)
         test_dataset = build_dataset(test_cases)
 
         # 输出目录
@@ -44,6 +45,7 @@ def main():
 
         # 保存 pt
         torch.save(train_dataset, out_dir / "train.pt")
+        torch.save(val_dataset, out_dir / "val.pt")
         torch.save(test_dataset, out_dir / "test.pt")
 
         # 保存 split（与 pt 同目录）
@@ -53,15 +55,17 @@ def main():
             "seed": RANDOM_SEED,
             "num_total": len(all_cases),
             "num_train": len(train_cases),
+            "num_val": len(val_cases),
             "num_test": len(test_cases),
             "train_case_ids": [c["case_id"] for c in train_cases],
+            "val_case_ids": [c["case_id"] for c in val_cases],
             "test_case_ids": [c["case_id"] for c in test_cases],
         }
 
         with open(out_dir / f"split_seed{RANDOM_SEED}.json", "w", encoding="utf-8") as f:
             json.dump(split_info, f, indent=2, ensure_ascii=False)
 
-        print(f"  total: {len(all_cases)} | train: {len(train_cases)} | test: {len(test_cases)}")
+        print(f"  total: {len(all_cases)} | train: {len(train_cases)} | val: {len(val_cases)} | test: {len(test_cases)}")
         print(f"  saved to: {out_dir.resolve()}")
 
 

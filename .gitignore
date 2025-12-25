@@ -1,4 +1,5 @@
-data/
-__pycache__/
+**/data/
+**/__pycache__/
 datasets/
-Z_TEST.py
+checkpoints/
+output_texts/

@@ -1,0 +1,153 @@
+# train.py
+import argparse
+import random
+
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
+
+from configs.train_config import *
+
+from models.cnn3d import Simple3DCNN as Model
+
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    message="You are using `torch.load` with `weights_only=False`"
+)
+
+from tqdm import tqdm
+
+
+# ================== 一些工具函数 ==================
+def set_seed(seed):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def load_pt_dataset(pt_path):
+    data = torch.load(pt_path, map_location="cpu")
+    x = data["images"]    # [N, 1, D, H, W]
+    y = data["labels"]    # [N]
+    return TensorDataset(x, y)
+
+
+# ================== 主训练流程 ==================
+def main(args):
+    set_seed(SEED)
+
+    # ---------- 选择序列 ----------
+    seq_idx = args.seq - 1
+    seq_id = SEQ_IDS[seq_idx]
+    seq_name = SEQ_NAMES[seq_idx]
+
+    print(f"\n=== Training on sequence {seq_id}: {seq_name} ===")
+
+    dataset_dir = DATASET_DIRS[seq_idx]
+    ckpt_dir = CKPT_DIRS[seq_idx]
+    ckpt_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---------- 加载数据 ----------
+    train_set = load_pt_dataset(dataset_dir / "train.pt")
+    val_set   = load_pt_dataset(dataset_dir / "val.pt")
+    test_set  = load_pt_dataset(dataset_dir / "test.pt")
+
+    train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
+    val_loader   = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
+
+    # ---------- 模型 ----------
+    model = Model(num_classes=NUM_CLASSES).to(DEVICE)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+
+    # ---------- 训练 ----------
+    best_val_loss = float("inf")
+    patience_counter = 0
+
+    for epoch in range(1, NUM_EPOCHS + 1):
+        # --- train ---
+        model.train()
+        total_loss = 0.0
+        correct = 0
+        total = 0
+
+        pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{NUM_EPOCHS}]", leave=False)
+        for x, y in pbar:
+            x, y = x.to(DEVICE), y.to(DEVICE)
+            optimizer.zero_grad()
+            logits = model(x)
+            loss = criterion(logits, y)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+            pred = logits.argmax(dim=1)
+            correct += (pred == y).sum().item()
+            total += y.size(0)
+
+        train_loss = total_loss / len(train_loader)
+        train_acc = correct / total
+
+        # --- validation ---
+        model.eval()
+        val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+        with torch.no_grad():
+            for x, y in val_loader:
+                x, y = x.to(DEVICE), y.to(DEVICE)
+                logits = model(x)
+                loss = criterion(logits, y)
+                val_loss += loss.item()
+                pred = logits.argmax(dim=1)
+                val_correct += (pred == y).sum().item()
+                val_total += y.size(0)
+
+        val_loss /= len(val_loader)
+        val_acc = val_correct / val_total
+
+        print(f"Epoch [{epoch}/{NUM_EPOCHS}] "
+              f"train_loss: {train_loss:.4f} | train_acc: {train_acc:.4f} "
+              f"val_loss: {val_loss:.4f} | val_acc: {val_acc:.4f}")
+
+        # --- early stopping ---
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            # 保存当前最佳模型
+            torch.save({
+                "model_state": model.state_dict(),
+                "sequence_id": seq_id,
+                "sequence_name": seq_name,
+            }, ckpt_dir / "model_best.pth")
+        else:
+            patience_counter += 1
+
+        if patience_counter >= PATIENCE:
+            print(f"\n[INFO] Early stopping triggered at epoch {epoch}. Best val_loss: {best_val_loss:.4f}")
+            break
+
+    # ---------- 保存最终模型 ----------
+    ckpt_path = ckpt_dir / "model_final.pth"
+    torch.save({
+        "model_state": model.state_dict(),
+        "sequence_id": seq_id,
+        "sequence_name": seq_name,
+    }, ckpt_path)
+    print(f"\n[SUCCESS] Model saved to {ckpt_path.resolve()}")
+
+
+# ================== CLI ==================
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--seq",
+        type=int,
+        required=True,
+        choices=[1, 2, 3, 4, 5],
+        help="Which MRI sequence to train (1~5)",
+    )
+    args = parser.parse_args()
+
+    main(args)

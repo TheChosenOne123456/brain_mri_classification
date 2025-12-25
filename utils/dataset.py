@@ -16,8 +16,9 @@ SEQ_IDS = {
     5: "+C",
 }
 
-TRAIN_RATIO = 0.8
 RANDOM_SEED = 42
+TRAIN_RATIO = 0.8
+VAL_RATIO = 0.1
 
 PROCESSED_ROOT = Path("data/processed")
 DATASET_ROOT = Path("datasets")
