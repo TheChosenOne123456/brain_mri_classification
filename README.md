@@ -149,3 +149,22 @@ python train.py --seq 5
 
 ## 当前使用模型
 cnn3d.py->Simple3DCNN
+
+## 评估模型
+评估模型的脚本是eval.py，它评估了模型的下列指标
+1. 准确率Accuracy：模型在测试集上预测的准确率
+2. 阳性预测值Precision：你说有病的，有多少是真的？
+3. 敏感度Recall：病人真的有病，你能不能抓住？
+4. F1分数F1-score：精确率Precision和召回率Recall的调和平均数
+5. 混淆矩阵Confusion Matrix：TP：正确预测为正例，FN：错误预测为负例，FP错误预测为正例，TN，正确预测为负例
+
+运行脚本
+```bash
+python eval.py --seq 1
+```
+或
+```bash
+bash eval_command.sh
+```
+
+结果可以在终端查看。

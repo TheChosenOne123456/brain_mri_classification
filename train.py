@@ -1,14 +1,16 @@
 # train.py
 import argparse
-import random
+# import random
 
 import torch
 import torch.nn as nn
-from torch.utils.data import TensorDataset, DataLoader
+from torch.utils.data import DataLoader
 
 from configs.train_config import *
 
 from models.cnn3d import Simple3DCNN as Model
+
+from utils.train_and_test import set_seed, load_pt_dataset
 
 import warnings
 warnings.filterwarnings(
@@ -17,20 +19,6 @@ warnings.filterwarnings(
 )
 
 from tqdm import tqdm
-
-
-# ================== 一些工具函数 ==================
-def set_seed(seed):
-    random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
-
-def load_pt_dataset(pt_path):
-    data = torch.load(pt_path, map_location="cpu")
-    x = data["images"]    # [N, 1, D, H, W]
-    y = data["labels"]    # [N]
-    return TensorDataset(x, y)
 
 
 # ================== 主训练流程 ==================
@@ -51,7 +39,6 @@ def main(args):
     # ---------- 加载数据 ----------
     train_set = load_pt_dataset(dataset_dir / "train.pt")
     val_set   = load_pt_dataset(dataset_dir / "val.pt")
-    test_set  = load_pt_dataset(dataset_dir / "test.pt")
 
     train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS)
     val_loader   = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
