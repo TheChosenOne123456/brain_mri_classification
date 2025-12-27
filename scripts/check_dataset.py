@@ -8,11 +8,7 @@ warnings.filterwarnings(
     message="You are using `torch.load` with `weights_only=False`"
 )
 
-# 将项目根目录添加到 sys.path，以便导入 utils
-project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
-
-from utils.dataset import SEQ_IDS, DATASET_ROOT
+from configs.global_config import *
 
 def get_distribution(pt_path):
     if not pt_path.exists():
@@ -41,7 +37,7 @@ def main():
     print(f"{'Sequence':<15} | {'Split':<6} | {'Total':<5} | {'Normal (0)':<12} | {'Meningitis (1)':<15}")
     print("-" * 75)
 
-    for seq_id, seq_name in SEQ_IDS.items():
+    for seq_id, seq_name in enumerate(ALL_SEQUENCES, start=1):
         seq_dir_name = f"seq{seq_id}_{seq_name}"
         seq_dir = DATASET_ROOT / seq_dir_name
 

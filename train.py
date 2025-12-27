@@ -1,4 +1,7 @@
-# train.py
+'''
+单通道MRI序列分类模型训练脚本，用参数--seq指定序列
+'''
+
 import argparse
 # import random
 
@@ -7,6 +10,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from configs.train_config import *
+from configs.global_config import *
 
 from models.cnn3d import Simple3DCNN as Model
 
@@ -26,9 +30,9 @@ def main(args):
     set_seed(SEED)
 
     # ---------- 选择序列 ----------
-    seq_idx = args.seq - 1
-    seq_id = SEQ_IDS[seq_idx]
-    seq_name = SEQ_NAMES[seq_idx]
+    seq_id = args.seq
+    seq_idx = seq_id - 1
+    seq_name = ALL_SEQUENCES[seq_idx]
 
     print(f"\n=== Training on sequence {seq_id}: {seq_name} ===")
 
@@ -132,8 +136,8 @@ if __name__ == "__main__":
         "--seq",
         type=int,
         required=True,
-        choices=[1, 2, 3, 4, 5],
-        help="Which MRI sequence to train (1~5)",
+        choices=range(1, NUM_SEQUENCES + 1),
+        help=f"Which MRI sequence to train (1~{NUM_SEQUENCES})",
     )
     args = parser.parse_args()
 

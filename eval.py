@@ -1,10 +1,15 @@
-# eval.py
+'''
+根据train.py训练的单通道模型，分别进行评估，用参数--seq指定序列
+'''
+
 import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from configs.train_config import *
+from configs.global_config import *
+
 from models.cnn3d import Simple3DCNN as Model
 from utils.train_and_test import set_seed, load_pt_dataset
 
@@ -29,9 +34,9 @@ def main(args):
     set_seed(SEED)
 
     # ---------- 选择序列 ----------
-    seq_idx = args.seq - 1
-    seq_id = SEQ_IDS[seq_idx]
-    seq_name = SEQ_NAMES[seq_idx]
+    seq_id = args.seq
+    seq_idx = seq_id - 1
+    seq_name = ALL_SEQUENCES[seq_idx]
 
     print(f"\n=== Evaluating on sequence {seq_id}: {seq_name} ===")
 
@@ -63,8 +68,10 @@ def main(args):
     all_labels = []
     total_loss = 0.0
 
+    misclassified_cases = []
+
     with torch.no_grad():
-        for x, y in test_loader:
+        for x, y, case_ids in test_loader:
             x, y = x.to(DEVICE), y.to(DEVICE)
             logits = model(x)
             loss = criterion(logits, y)
@@ -72,8 +79,20 @@ def main(args):
             total_loss += loss.item()
             preds = logits.argmax(dim=1)
 
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(y.cpu().numpy())
+            preds_cpu = preds.cpu().numpy()
+            labels_cpu = y.cpu().numpy()
+
+            all_preds.extend(preds_cpu)
+            all_labels.extend(labels_cpu)
+
+            # --------- 收集误判 case ---------
+            for cid, p, gt in zip(case_ids, preds_cpu, labels_cpu):
+                if p != gt:
+                    misclassified_cases.append({
+                        "case_id": cid,
+                        "gt": int(gt),
+                        "pred": int(p),
+                    })
 
     avg_loss = total_loss / len(test_loader)
 
@@ -108,6 +127,16 @@ def main(args):
         )
     )
 
+    # ---------- 打印误判 case ----------
+    print("\n===== Misclassified Cases =====")
+    print(f"Total misclassified: {len(misclassified_cases)}")
+
+    for item in misclassified_cases:
+        print(
+            f"CaseID: {item['case_id']} | "
+            f"GT: {item['gt']} | Pred: {item['pred']}"
+        )
+
 
 # ================== CLI ==================
 if __name__ == "__main__":
@@ -116,8 +145,8 @@ if __name__ == "__main__":
         "--seq",
         type=int,
         required=True,
-        choices=[1, 2, 3, 4, 5],
-        help="Which MRI sequence to evaluate (1~5)",
+        choices=range(1, NUM_SEQUENCES + 1),
+        help="Which MRI sequence to evaluate (1~{NUM_SEQUENCES})",
     )
     args = parser.parse_args()
 

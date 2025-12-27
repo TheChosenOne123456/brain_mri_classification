@@ -1,72 +1,105 @@
 '''
-根据预处理后的数据构造.pt数据集
+根据预处理后的数据构造.pt数据集（case 级别统一划分）
 '''
 import random
 import json
 
 import torch
 
-from utils.dataset import *
+from utils.dataset import build_dataset, collect_cases_by_seq
+from configs.global_config import *
 
 
-# ================== 主流程 ==================
 def main():
-    random.seed(RANDOM_SEED)
+    random.seed(SEED)
 
-    for seq_id, seq_name in SEQ_IDS.items():
+    # ============================================================
+    # 1. 收集所有序列的 case（按 case_id 对齐）
+    # ============================================================
+    print("\n[STEP 1] Collecting cases from all sequences...")
+
+    seq_case_maps = {}
+    for seq_id, seq_name in enumerate(ALL_SEQUENCES, start=1):
+        seq_case_maps[seq_id] = collect_cases_by_seq(seq_id)
+        print(f"  {seq_name}: {len(seq_case_maps[seq_id])} cases")
+
+    # ============================================================
+    # 2. 只保留「所有序列都存在」的 case
+    # ============================================================
+    print("\n[STEP 2] Filtering complete cases...")
+
+    all_case_ids = set.intersection(
+        *[set(cases.keys()) for cases in seq_case_maps.values()]
+    )
+
+    all_case_ids = sorted(all_case_ids)
+
+    if len(all_case_ids) == 0:
+        print("[ERROR] No complete cases found.")
+        return
+
+    print(f"  Complete cases: {len(all_case_ids)}")
+
+    # ============================================================
+    # 3. case 级别统一划分
+    # ============================================================
+    random.shuffle(all_case_ids)
+
+    n_total = len(all_case_ids)
+    n_train = int(n_total * TRAIN_RATIO)
+    n_val = int(n_total * VAL_RATIO)
+
+    train_ids = all_case_ids[:n_train]
+    val_ids   = all_case_ids[n_train:n_train + n_val]
+    test_ids  = all_case_ids[n_train + n_val:]
+
+    print(f"\n[STEP 3] Split cases")
+    print(f"  total: {n_total} | train: {len(train_ids)} | val: {len(val_ids)} | test: {len(test_ids)}")
+
+    # ============================================================
+    # 4. 按序列构建 pt 数据集（使用同一组 case_id）
+    # ============================================================
+    print("\n[STEP 4] Building datasets per sequence...")
+
+    for seq_id, seq_name in enumerate(ALL_SEQUENCES, start=1):
         print(f"\n=== Processing sequence {seq_id}: {seq_name} ===")
 
-        normal_cases = collect_cases(seq_id, label=0)
-        meningitis_cases = collect_cases(seq_id, label=1)
+        seq_cases = seq_case_maps[seq_id]
 
-        all_cases = normal_cases + meningitis_cases
-        random.shuffle(all_cases)
+        train_cases = [seq_cases[cid] for cid in train_ids]
+        val_cases   = [seq_cases[cid] for cid in val_ids]
+        test_cases  = [seq_cases[cid] for cid in test_ids]
 
-        if len(all_cases) == 0:
-            print("  [SKIP] No cases found.")
-            continue
-
-        n_total = len(all_cases)
-        n_train = int(n_total * TRAIN_RATIO)
-        n_val = int(n_total * VAL_RATIO)
-
-        train_cases = all_cases[:n_train]
-        val_cases = all_cases[n_train : n_train + n_val]
-        test_cases = all_cases[n_train + n_val:]
-
-        # 构建数据集
         train_dataset = build_dataset(train_cases)
-        val_dataset = build_dataset(val_cases)
-        test_dataset = build_dataset(test_cases)
+        val_dataset   = build_dataset(val_cases)
+        test_dataset  = build_dataset(test_cases)
 
-        # 输出目录
         out_dir = DATASET_ROOT / f"seq{seq_id}_{seq_name}"
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        # 保存 pt
         torch.save(train_dataset, out_dir / "train.pt")
         torch.save(val_dataset, out_dir / "val.pt")
         torch.save(test_dataset, out_dir / "test.pt")
 
-        # 保存 split（与 pt 同目录）
         split_info = {
             "sequence_id": seq_id,
             "sequence_name": seq_name,
-            "seed": RANDOM_SEED,
-            "num_total": len(all_cases),
-            "num_train": len(train_cases),
-            "num_val": len(val_cases),
-            "num_test": len(test_cases),
-            "train_case_ids": [c["case_id"] for c in train_cases],
-            "val_case_ids": [c["case_id"] for c in val_cases],
-            "test_case_ids": [c["case_id"] for c in test_cases],
+            "seed": SEED,
+            "num_total": n_total,
+            "num_train": len(train_ids),
+            "num_val": len(val_ids),
+            "num_test": len(test_ids),
+            "train_case_ids": train_ids,
+            "val_case_ids": val_ids,
+            "test_case_ids": test_ids,
         }
 
-        with open(out_dir / f"split_seed{RANDOM_SEED}.json", "w", encoding="utf-8") as f:
+        with open(out_dir / f"split_seed{SEED}.json", "w", encoding="utf-8") as f:
             json.dump(split_info, f, indent=2, ensure_ascii=False)
 
-        print(f"  total: {len(all_cases)} | train: {len(train_cases)} | val: {len(val_cases)} | test: {len(test_cases)}")
         print(f"  saved to: {out_dir.resolve()}")
+
+    print("\n[SUCCESS] All sequences processed with aligned splits.")
 
 
 if __name__ == "__main__":

@@ -6,22 +6,7 @@ import torch
 import nibabel as nib
 from tqdm import tqdm
 
-
-# ================== 全局配置 ==================
-SEQ_IDS = {
-    1: "T1",
-    2: "T2",
-    3: "FLAIR",
-    4: "DWI",
-    5: "+C",
-}
-
-RANDOM_SEED = 42
-TRAIN_RATIO = 0.8
-VAL_RATIO = 0.1
-
-PROCESSED_ROOT = Path("data/processed")
-DATASET_ROOT = Path("datasets")
+from configs.global_config import *
 
 
 # ================== 工具函数 ==================
@@ -36,11 +21,12 @@ def load_nii_as_tensor(nii_path: Path) -> torch.Tensor:
     return torch.from_numpy(data).unsqueeze(0)
 
 
+# 目前已弃用
 def collect_cases(seq_id: int, label: int):
     """
     从 data/processed/{label}/{seq_id}/ 下收集该序列的所有 case
     """
-    seq_dir = PROCESSED_ROOT / ("1_meningitis" if label == 1 else "0_normal") / str(seq_id)
+    seq_dir = PROCESSED_DATA_PATH / ("1_meningitis" if label == 1 else "0_normal") / str(seq_id)
     cases = []
 
     for nii_file in sorted(seq_dir.glob(f"case_*_{seq_id}.nii.gz")):
@@ -50,6 +36,36 @@ def collect_cases(seq_id: int, label: int):
             "nii_path": nii_file,
             "label": label
         })
+
+    return cases
+
+
+# 按序列收集 case
+def collect_cases_by_seq(seq_id: int):
+    """
+    按序列收集 case，返回 dict：
+    {
+        case_id: {
+            "case_id": str,
+            "nii_path": Path,
+            "label": int
+        }
+    }
+    """
+    cases = {}
+
+    for label, label_dir in [(0, "0_normal"), (1, "1_meningitis")]:
+        seq_dir = Path(PROCESSED_DATA_PATH) / label_dir / str(seq_id)
+        if not seq_dir.exists():
+            continue
+
+        for nii_file in seq_dir.glob(f"case_*_{seq_id}.nii.gz"):
+            case_id = nii_file.name.split("_")[1]
+            cases[case_id] = {
+                "case_id": case_id,
+                "nii_path": nii_file,
+                "label": label
+            }
 
     return cases
 
@@ -71,6 +87,6 @@ def build_dataset(cases):
         "meta": {
             "num_samples": len(cases),
             "created_time": datetime.now().isoformat(),
-            "seed": RANDOM_SEED,
+            "seed": SEED,
         }
     }

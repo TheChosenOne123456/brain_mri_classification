@@ -3,8 +3,6 @@
 收集 case 文件夹
 '''
 
-from pathlib import Path
-
 def collect_cases(src_dirs):
     """遍历源目录，收集所有 case 文件夹"""
     cases = []

@@ -16,16 +16,16 @@ NUM_WORKERS = 4
 PATIENCE = 10  # 早停耐心值
 
 # ================== 序列信息（固定顺序！） ==================
-SEQ_IDS = [1, 2, 3, 4, 5]
-SEQ_NAMES = ["T1", "T2", "FLAIR", "DWI", "+C"]
+# SEQ_IDS = [1, 2, 3]
+# SEQ_NAMES = ["T1", "T2", "FLAIR"]
 
 # ================== 数据集路径（与 SEQ_IDS 一一对应） ==================
 DATASET_DIRS = [
     Path("datasets/seq1_T1"),
     Path("datasets/seq2_T2"),
     Path("datasets/seq3_FLAIR"),
-    Path("datasets/seq4_DWI"),
-    Path("datasets/seq5_+C"),
+    # Path("datasets/seq4_DWI"),
+    # Path("datasets/seq5_+C"),
 ]
 
 # ================== 模型保存路径 ==================
@@ -36,6 +36,6 @@ CKPT_DIRS = [
     CKPT_ROOT / "seq1_T1",
     CKPT_ROOT / "seq2_T2",
     CKPT_ROOT / "seq3_FLAIR",
-    CKPT_ROOT / "seq4_DWI",
-    CKPT_ROOT / "seq5_+C",
+    # CKPT_ROOT / "seq4_DWI",
+    # CKPT_ROOT / "seq5_+C",
 ]

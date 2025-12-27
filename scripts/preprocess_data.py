@@ -8,6 +8,8 @@ import re
 
 from tqdm import tqdm
 
+from configs.global_config import *
+
 from utils.sequences import identify_sequence
 from utils.data_scan import collect_cases
 from utils.io import load_index, save_index, INDEX_FILE_NAME
@@ -15,7 +17,6 @@ from utils.resample import resample_image, save_image
 from utils.intensity import normalize_intensity
 from utils.spatial import center_crop_or_pad
 
-TARGET_SHAPE = (160, 192, 160)  # (D, H, W)
 
 def main(args):
     raw_root = Path(args.raw_root).resolve()
@@ -34,16 +35,16 @@ def main(args):
 
     # ===== 定义数据源 =====
     meningitis_dirs = [
-        raw_root / "脑膜病变图像" / "脑膜炎主诊",
-        raw_root / "脑膜病变图像" / "脑膜炎次诊",
+        raw_root / subdir for subdir in MENINGITIS_SUBDIRS
     ]
+
     normal_dirs = [
-        raw_root / "正常头颅MRI"
+        raw_root / subdir for subdir in NORMAL_SUBDIRS
     ]
 
     # ===== 输出目录初始化 =====
     for label_name in ["0_normal", "1_meningitis"]:
-        for seq_id in range(1, 6):
+        for seq_id in range(1, 4):
             (out_root / label_name / str(seq_id)).mkdir(parents=True, exist_ok=True)
 
     def process_cases(case_dirs, label_name, desc):
@@ -74,7 +75,7 @@ def main(args):
                     continue
 
                 # ===== 新增: 重采样 + 强度归一化 =====
-                resampled_img = resample_image(nii_file, target_spacing=(1.0,1.0,1.0), is_label=False)
+                resampled_img = resample_image(nii_file, target_spacing=TARGET_SPACING, is_label=False)
                 normalized_img = normalize_intensity(resampled_img)
 
                 fixed_img = center_crop_or_pad(normalized_img, TARGET_SHAPE)
@@ -105,13 +106,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--raw_root",
         type=str,
-        default="/home/tbing/projects/data/brainMRI",
+        default=RAW_DATA_PATH,
         help="Path to raw brainMRI directory"
     )
     parser.add_argument(
         "--out_root",
         type=str,
-        default="data/processed",
+        default=PROCESSED_DATA_PATH,
         help="Output processed data directory"
     )
     args = parser.parse_args()
