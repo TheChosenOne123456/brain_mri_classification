@@ -2,6 +2,7 @@
 根据train.py训练的多个单通道模型，进行投票评估
 '''
 
+import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -9,7 +10,8 @@ from torch.utils.data import DataLoader
 from configs.train_config import *
 from configs.global_config import *
 
-from models.cnn3d import Simple3DCNN as Model
+from models.cnn3d import Simple3DCNN
+from models.ResNet import ResNet10
 from utils.train_and_test import set_seed, load_pt_dataset
 
 import warnings
@@ -32,10 +34,20 @@ from sklearn.metrics import (
 def main():
     set_seed(SEED)
 
+    # ---------- 选择模型 ----------
+    model_name = args.model
+    if model_name == "cnn3d":
+        ModelClass = Simple3DCNN
+    elif model_name == "ResNet":
+        ModelClass = ResNet10
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
+
     num_seq = len(ALL_SEQUENCES)
     assert num_seq >= 2, "Voting requires at least 2 sequences."
 
     print("\n=== Voting Evaluation ===")
+    print(f"Model architecture: {model_name}")
     print(f"Sequences: {ALL_SEQUENCES}")
 
     # ------------------------------------------------
@@ -72,13 +84,13 @@ def main():
         ckpt_path = ckpt_dir / "model_best.pth"
         assert ckpt_path.exists(), f"Checkpoint not found: {ckpt_path}"
 
-        model = Model(num_classes=NUM_CLASSES).to(DEVICE)
+        model = ModelClass(num_classes=NUM_CLASSES).to(DEVICE)
         checkpoint = torch.load(ckpt_path, map_location=DEVICE)
         model.load_state_dict(checkpoint["model_state"])
         model.eval()
 
         models.append(model)
-        print(f"Loaded model for {seq_name}")
+        print(f"Loaded {model_name} model for {seq_name}")
 
     criterion = nn.CrossEntropyLoss()
 
@@ -215,4 +227,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        choices=["cnn3d", "ResNet"],
+        help="Which model architecture to use for voting",
+    )
+    args = parser.parse_args()
+
+    main(args)

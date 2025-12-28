@@ -10,7 +10,8 @@ from torch.utils.data import DataLoader
 from configs.train_config import *
 from configs.global_config import *
 
-from models.cnn3d import Simple3DCNN as Model
+from models.cnn3d import Simple3DCNN
+from models.ResNet import ResNet10
 from utils.train_and_test import set_seed, load_pt_dataset
 
 import warnings
@@ -38,10 +39,19 @@ def main(args):
     seq_idx = seq_id - 1
     seq_name = ALL_SEQUENCES[seq_idx]
 
-    print(f"\n=== Evaluating on sequence {seq_id}: {seq_name} ===")
+    # ---------- 选择模型 ----------
+    model_name = args.model
+    if model_name == "cnn3d":
+        ModelClass = Simple3DCNN
+    elif model_name == "ResNet":
+        ModelClass = ResNet10
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
+
+    print(f"\n=== Evaluating {model_name} on sequence {seq_id}: {seq_name} ===")
 
     dataset_dir = DATASET_DIRS[seq_idx]
-    ckpt_dir = CKPT_DIRS[seq_idx]
+    ckpt_dir = CKPT_DIRS[seq_idx] / model_name
 
     # ---------- 加载 test 数据 ----------
     test_set = load_pt_dataset(dataset_dir / "test.pt")
@@ -56,7 +66,7 @@ def main(args):
     ckpt_path = ckpt_dir / "model_best.pth"
     assert ckpt_path.exists(), f"Checkpoint not found: {ckpt_path}"
 
-    model = Model(num_classes=NUM_CLASSES).to(DEVICE)
+    model = ModelClass(num_classes=NUM_CLASSES).to(DEVICE)
     checkpoint = torch.load(ckpt_path, map_location=DEVICE)
     model.load_state_dict(checkpoint["model_state"])
     model.eval()
@@ -147,6 +157,13 @@ if __name__ == "__main__":
         required=True,
         choices=range(1, NUM_SEQUENCES + 1),
         help="Which MRI sequence to evaluate (1~{NUM_SEQUENCES})",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        choices=["cnn3d", "ResNet"],
+        help="Which model architecture to use",
     )
     args = parser.parse_args()
 

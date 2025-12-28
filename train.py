@@ -12,7 +12,8 @@ from torch.utils.data import DataLoader
 from configs.train_config import *
 from configs.global_config import *
 
-from models.cnn3d import Simple3DCNN as Model
+from models.cnn3d import Simple3DCNN
+from models.ResNet import ResNet10
 
 from utils.train_and_test import set_seed, load_pt_dataset
 
@@ -34,10 +35,19 @@ def main(args):
     seq_idx = seq_id - 1
     seq_name = ALL_SEQUENCES[seq_idx]
 
+    # ---------- 选择模型 ----------
+    model_name = args.model
+    if model_name == "cnn3d":
+        ModelClass = Simple3DCNN
+    elif model_name == "ResNet":
+        ModelClass = ResNet10
+    else:
+        raise ValueError(f"Unknown model: {model_name}")
+
     print(f"\n=== Training on sequence {seq_id}: {seq_name} ===")
 
     dataset_dir = DATASET_DIRS[seq_idx]
-    ckpt_dir = CKPT_DIRS[seq_idx]
+    ckpt_dir = CKPT_DIRS[seq_idx] / model_name
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
     # ---------- 加载数据 ----------
@@ -48,7 +58,7 @@ def main(args):
     val_loader   = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS)
 
     # ---------- 模型 ----------
-    model = Model(num_classes=NUM_CLASSES).to(DEVICE)
+    model = ModelClass(num_classes=NUM_CLASSES).to(DEVICE)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
@@ -64,7 +74,7 @@ def main(args):
         total = 0
 
         pbar = tqdm(train_loader, desc=f"Epoch [{epoch}/{NUM_EPOCHS}]", leave=False)
-        for x, y in pbar:
+        for x, y, _ in pbar:
             x, y = x.to(DEVICE), y.to(DEVICE)
             optimizer.zero_grad()
             logits = model(x)
@@ -86,7 +96,7 @@ def main(args):
         val_correct = 0
         val_total = 0
         with torch.no_grad():
-            for x, y in val_loader:
+            for x, y, _ in val_loader:
                 x, y = x.to(DEVICE), y.to(DEVICE)
                 logits = model(x)
                 loss = criterion(logits, y)
@@ -111,6 +121,7 @@ def main(args):
                 "model_state": model.state_dict(),
                 "sequence_id": seq_id,
                 "sequence_name": seq_name,
+                "model_name": model_name, # 记录模型名
             }, ckpt_dir / "model_best.pth")
         else:
             patience_counter += 1
@@ -125,6 +136,7 @@ def main(args):
         "model_state": model.state_dict(),
         "sequence_id": seq_id,
         "sequence_name": seq_name,
+        "model_name": model_name, # 记录模型名
     }, ckpt_path)
     print(f"\n[SUCCESS] Model saved to {ckpt_path.resolve()}")
 
@@ -138,6 +150,13 @@ if __name__ == "__main__":
         required=True,
         choices=range(1, NUM_SEQUENCES + 1),
         help=f"Which MRI sequence to train (1~{NUM_SEQUENCES})",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        required=True,
+        choices=["cnn3d", "ResNet"],
+        help="Which model architecture to use",
     )
     args = parser.parse_args()
 
