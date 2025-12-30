@@ -36,3 +36,6 @@ TARGET_SHAPE = (160, 192, 160)
 DATASET_ROOT = Path("datasets")
 TRAIN_RATIO = 0.8
 VAL_RATIO = 0.1
+
+# ========== Inference ==========
+INFERENCE_OUTPUT_DIR = Path("inference_outputs")

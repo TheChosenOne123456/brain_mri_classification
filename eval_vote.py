@@ -31,7 +31,7 @@ from sklearn.metrics import (
 
 
 # ================== 投票评估流程 ==================
-def main():
+def main(args):
     set_seed(SEED)
 
     # ---------- 选择模型 ----------
@@ -81,7 +81,7 @@ def main():
     models = []
 
     for seq_name, ckpt_dir in zip(ALL_SEQUENCES, CKPT_DIRS):
-        ckpt_path = ckpt_dir / "model_best.pth"
+        ckpt_path = ckpt_dir / model_name / "model_best.pth"
         assert ckpt_path.exists(), f"Checkpoint not found: {ckpt_path}"
 
         model = ModelClass(num_classes=NUM_CLASSES).to(DEVICE)
