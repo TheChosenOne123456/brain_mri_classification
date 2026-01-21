@@ -97,9 +97,18 @@ python -m scripts.build_dataset
 ## 训练模型
 训练模型主要涉及三个文件train.py、configs/train_config.py和models/cnn3d.py。其中，train.py是训练脚本的入口，configs/train_config.py定义了数据路径、输出路径和训练超参数等数据，models/cnn3d.py定义了模型的结构。当然，这个结构不是一成不变的，后续可能添加其他的模型文件，将train.py中的cnn3d替换就行了。
 
-默认的输入路径是datasets/seq..，输出路径是checkpoints/seq..。运行脚本
+有关超参数（train_config.py）：
+```python
+NUM_EPOCHS = 100
+BATCH_SIZE = 2
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 1e-5
+PATIENCE = 10
+```
+
+默认的输入路径是datasets/seq..，输出路径是checkpoints/seq..。train.py有两个参数，--seq表示基于哪一种序列训练，--model表示使用哪种结构的模型。运行脚本
 ```bash
-python train.py --seq 1
+python train.py --seq 1 --model cnn3d
 ```
 或
 ```bash
@@ -107,9 +116,9 @@ bash  train_command.sh
 ```
 train_command.sh可以自由编辑，例如
 ```bash
-python train.py --seq 1
-# python tarin.py --seq 2
-python train.py --seq 3
+python train.py --seq 1 --model cnn3d
+# python tarin.py --seq 2 --model cnn3d
+python train.py --seq 3 --model cnn3d
 ```
 
 训练完成后，应该可以在checkpoints目录下看到输出文件
@@ -153,3 +162,28 @@ bash eval_command.sh
 python eval_vote.py
 ```
 即可查看模型投票后的各种指标。
+
+## 新机制：K_FOLDS交叉验证
+第一次训练的参数：
+```python
+K_FOLDS = 5
+K_FOLDS_VAL_RATIO = 0.1
+
+NUM_EPOCHS = 100
+BATCH_SIZE = 2
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 1e-5
+PATIENCE = 10
+```
+
+第二次训练的参数：
+```python
+K_FOLDS = 5
+K_FOLDS_VAL_RATIO = 0.15
+
+NUM_EPOCHS = 100
+BATCH_SIZE = 2
+LEARNING_RATE = 1e-4
+WEIGHT_DECAY = 1e-5
+PATIENCE = 20
+```

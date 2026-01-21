@@ -37,5 +37,8 @@ DATASET_ROOT = Path("datasets")
 TRAIN_RATIO = 0.8
 VAL_RATIO = 0.1
 
+K_FOLDS = 5 # 用于交叉验证的折数
+K_FOLDS_VAL_RATIO = 0.15  # val在 train+val 中的比例
+
 # ========== Inference ==========
 INFERENCE_OUTPUT_DIR = Path("inference_outputs")

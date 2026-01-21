@@ -6,6 +6,7 @@ SEED = 42
 NUM_CLASSES = 2
 
 NUM_EPOCHS = 100
+MIN_EPOCHS = 40  # 最少训练轮数，保护期内不触发早停
 BATCH_SIZE = 2
 LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 1e-5
@@ -13,7 +14,7 @@ WEIGHT_DECAY = 1e-5
 DEVICE = "cuda"   # "cuda" or "cpu"
 NUM_WORKERS = 4
 
-PATIENCE = 10  # 早停耐心值
+PATIENCE = 20  # 早停耐心值
 
 # ================== 序列信息（固定顺序！） ==================
 # SEQ_IDS = [1, 2, 3]
