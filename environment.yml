@@ -157,4 +157,3 @@ dependencies:
       - tqdm==4.67.1
       - tzdata==2025.3
       - zipp==3.23.0
-prefix: /home/tbing/miniconda3/envs/BrainMRIClassification

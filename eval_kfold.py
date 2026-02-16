@@ -3,6 +3,7 @@ K-Fold 评估脚本：
 功能与 eval.py 类似，但支持 K-Fold 交叉验证模型。
 - 如果指定 --fold N，则只评估第 N 折。
 - 如果不指定 --fold，则自动评估所有 fold 并计算平均指标。
+[适配新服务器：8x RTX 3080]
 '''
 
 import argparse
@@ -69,6 +70,12 @@ def evaluate_single_fold(seq_idx, model_name, fold_idx, ModelClass):
     model = ModelClass(num_classes=NUM_CLASSES).to(DEVICE)
     checkpoint = torch.load(ckpt_path, map_location=DEVICE)
     model.load_state_dict(checkpoint["model_state"])
+
+    # [修改点] 启用多卡 DataParallel
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs!")
+        model = nn.DataParallel(model)
+
     model.eval()
 
     criterion = nn.CrossEntropyLoss()

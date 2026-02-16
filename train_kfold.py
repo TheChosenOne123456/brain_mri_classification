@@ -1,11 +1,20 @@
 '''
 K-Fold 训练脚本：指定 --fold 参数 (1~5) 进行训练
 模型将保存为 fold{k}_model_best.pth
+[适配新服务器：8x RTX 3080]
 '''
 import argparse
 import sys
 import torch
 import torch.nn as nn
+# 引入 AMP 模块 (兼容新旧版本写法)
+try:
+    from torch.amp import GradScaler, autocast
+    scaler_args = {'device': 'cuda'}
+except ImportError:
+    from torch.cuda.amp import GradScaler, autocast
+    scaler_args = {}
+
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from pathlib import Path
@@ -27,7 +36,9 @@ def calculate_accuracy(loader, model, device):
     with torch.no_grad():
         for x, y, _ in loader:
             x, y = x.to(device), y.to(device)
-            outputs = model(x)
+            # 验证时也开启 autocast 以节省显存
+            with autocast(**({'device_type': 'cuda'} if 'device' in scaler_args else {})):
+                outputs = model(x)
             _, predicted = torch.max(outputs.data, 1)
             total += y.size(0)
             correct += (predicted == y).sum().item()
@@ -69,9 +80,19 @@ def main(args):
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
-    model = ModelClass(num_classes=NUM_CLASSES).to(DEVICE)
+    model = ModelClass(num_classes=NUM_CLASSES)
+    model = model.to(DEVICE)
+
+    # 启用多卡 DataParallel
+    if torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs!")
+        model = nn.DataParallel(model)
+
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+
+    # 初始化混合精度 Scaler (使用兼容写法)
+    scaler = GradScaler(**scaler_args)
 
     # 训练循环 &早停
     best_val_loss = float("inf")
@@ -86,17 +107,30 @@ def main(args):
         model.train()
         total_loss = 0.0
         train_correct = 0
-        train_total = 0 # 显式计算 Train Acc，避免二次遍历
+        train_total = 0 
         
         # 进度条
         pbar = tqdm(train_loader, desc=f"Fold {current_fold} Ep {epoch}", leave=False)
         for x, y, _ in pbar:
             x, y = x.to(DEVICE), y.to(DEVICE)
             optimizer.zero_grad()
-            logits = model(x)
-            loss = criterion(logits, y)
-            loss.backward()
-            optimizer.step()
+            
+            # AMP 前向传播
+            # device_type='cuda' 用于新版 torch.amp.autocast，旧版不需要参数但兼容性不同
+            # 这里做个简单的兼容处理
+            if 'device' in scaler_args:
+                actx = autocast(device_type='cuda')
+            else:
+                actx = autocast()
+
+            with actx:
+                logits = model(x)
+                loss = criterion(logits, y)
+            
+            # AMP 反向传播
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             
             total_loss += loss.item()
             _, predicted = torch.max(logits.data, 1)
@@ -114,8 +148,16 @@ def main(args):
         with torch.no_grad():
             for x, y, _ in val_loader:
                 x, y = x.to(DEVICE), y.to(DEVICE)
-                logits = model(x)
-                loss = criterion(logits, y)
+                
+                # 验证集也开启 autocast 节省显存
+                if 'device' in scaler_args:
+                    actx = autocast(device_type='cuda')
+                else:
+                    actx = autocast()
+                
+                with actx:
+                    logits = model(x)
+                    loss = criterion(logits, y)
                 
                 val_loss += loss.item()
                 _, predicted = torch.max(logits.data, 1)
@@ -126,7 +168,6 @@ def main(args):
         val_acc = val_correct / val_total
 
         # --- 打印格式 ---
-        # Epoch [1/100] train_loss: 0.4240 | train_acc: 0.8257   val_loss: 0.2778 | val_acc: 0.9155
         print(f"Epoch [{epoch}/{NUM_EPOCHS}] "
               f"train_loss: {train_loss:.4f} | train_acc: {train_acc:.4f}   "
               f"val_loss: {val_loss:.4f} | val_acc: {val_acc:.4f}")
@@ -136,8 +177,12 @@ def main(args):
             best_val_loss = val_loss
             patience_counter = 0
             best_epoch = epoch
+            
+            # 保存时剥离 DataParallel 包装，否则以后加载会报错
+            model_to_save = model.module if isinstance(model, nn.DataParallel) else model
+            
             torch.save({
-                "model_state": model.state_dict(),
+                "model_state": model_to_save.state_dict(),
                 "fold": current_fold,
                 "epoch": epoch,
                 "val_loss": best_val_loss,

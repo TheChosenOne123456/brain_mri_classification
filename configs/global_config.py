@@ -15,7 +15,7 @@ ALL_SEQUENCES = ["T1", "T2", "FLAIR"]
 NUM_SEQUENCES = len(ALL_SEQUENCES)
 
 # ========== Paths ==========
-RAW_DATA_PATH = Path("/home/tbing/projects/data/brainMRI")    # 原始数据根目录
+RAW_DATA_PATH = Path("/home/ailab/data/brainMRI/脑膜病变")    # 原始数据根目录
 # PROCESSED_DATA_PATH = "data/processed"
 PROCESSED_DATA_PATH = Path("data")
 
