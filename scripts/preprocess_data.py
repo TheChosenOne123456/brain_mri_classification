@@ -1,11 +1,10 @@
 '''
 数据预处理，实现重采样、归一化和裁剪/填充
+[重构版 - 功能完全复刻]
 '''
 import argparse
-import shutil
-from pathlib import Path
 import re
-
+from pathlib import Path
 from tqdm import tqdm
 
 from configs.global_config import *
@@ -19,6 +18,7 @@ from utils.spatial import center_crop_or_pad
 
 
 def main(args):
+    # 路径解析
     raw_root = Path(args.raw_root).resolve()
     out_root = Path(args.out_root).resolve()
 
@@ -28,73 +28,108 @@ def main(args):
     # ===== 读取 / 初始化 index =====
     case_index = load_index(index_path)
 
+    # 恢复计数器状态
     if case_index:
-        max_case_id = max(case_index.values())
+        try:
+            # 兼容旧索引结构：Key是原始路径/文件名，Value是int ID
+            max_case_id = max(case_index.values())
+        except ValueError:
+            max_case_id = 0
     else:
         max_case_id = 0
 
-    # ===== 定义数据源 =====
-    meningitis_dirs = [
-        raw_root / subdir for subdir in MENINGITIS_SUBDIRS
-    ]
+    print(f"Starting preprocessing for {NUM_CLASSES} classes: {CLASS_NAMES}")
+    print(f"Current Max Case ID: {max_case_id}")
 
-    normal_dirs = [
-        raw_root / subdir for subdir in NORMAL_SUBDIRS
-    ]
+    # ===== [核心修改] 动态遍历所有类别 =====
+    # 逻辑：遍历 global_config 中定义的所有类别，而不是写死 normal/meningitis
+    for label_id, label_name in enumerate(CLASS_NAMES):
+        subdirs = CLASS_DATA_MAP[label_name]
 
-    # ===== 输出目录初始化 =====
-    for label_name in ["0_normal", "1_meningitis"]:
-        for seq_id in range(1, 4):
-            (out_root / label_name / str(seq_id)).mkdir(parents=True, exist_ok=True)
+        # 构造源目录列表
+        target_dirs = []
+        for subdir in subdirs:
+            # 支持相对路径拼接
+            d = raw_root / subdir
+            if d.exists():
+                target_dirs.append(d)
+        
+        if not target_dirs:
+            print(f"No valid source directories for class {label_name}, skipping.")
+            continue
 
-    def process_cases(case_dirs, label_name, desc):
-        nonlocal max_case_id
+        # 1. 收集该类别的所有原始 Case
+        cases = collect_cases(target_dirs)
+        
+        # 2. 预创建输出目录结构
+        # 格式：out_root / "{label_name}" / "{seq_id}" (e.g. 0_normal/1)
+        # 注意：这里 label_name 已经包含了 label_id 前缀? 
+        # 不，global_config 的 key 是 pure name (e.g. "normal")
+        # 旧代码的输出目录名是 "0_normal", "1_meningitis"
+        # 这里需要手动拼接 label_id 和 label_name 以保持一致
+        
+        # 构造符合旧代码习惯的文件夹名：id_name
+        # e.g. 0_normal
+        output_class_dir = f"{label_id}_{label_name}"
 
-        for case_dir in tqdm(case_dirs, desc=desc):
-            # case_key = str(case_dir.resolve())
-            # 只取文件夹末尾数字
+        for seq_id in range(1, NUM_SEQUENCES + 1):
+            (out_root / output_class_dir / str(seq_id)).mkdir(parents=True, exist_ok=True)
+
+        # 3. 处理该类别下的所有 Case
+        desc = f"Processing {label_name} cases"
+        
+        for case_dir in tqdm(cases, desc=desc):
+            # --- 提取唯一 Case Key (保持原逻辑) ---
             folder_name = case_dir.name
-            # 提取连续数字，取最后一组
             match = re.findall(r'\d+', folder_name)
             if match:
                 case_key = match[-1]
             else:
-                case_key = folder_name  
+                case_key = folder_name
 
-            # ===== 已处理过，跳过 =====
+            # --- 增量检查 ---
             if case_key in case_index:
                 continue
 
+            # --- 分配新 ID ---
             max_case_id += 1
-            case_id = f"{max_case_id:04d}"
+            # 格式化为 0001 (str)
+            case_id_str = f"{max_case_id:04d}"
+            # 记录索引
             case_index[case_key] = max_case_id
 
+            # --- 扫描并处理 NIfTI 文件 ---
+            # 使用 rglob 递归查找，与旧代码一致
             for nii_file in case_dir.rglob("*.nii*"):
+                # [关键修正] 传入 Path 对象
                 seq_id = identify_sequence(nii_file)
+                
                 if seq_id is None:
                     continue
 
-                # ===== 新增: 重采样 + 强度归一化 =====
-                resampled_img = resample_image(nii_file, target_spacing=TARGET_SPACING, is_label=False)
-                normalized_img = normalize_intensity(resampled_img)
+                try:
+                    # ===== 图像处理流程 (完全复刻) =====
+                    # 1. 重采样
+                    resampled_img = resample_image(nii_file, target_spacing=TARGET_SPACING, is_label=False)
+                    
+                    # 2. 强度归一化
+                    normalized_img = normalize_intensity(resampled_img)
+                    
+                    # 3. 裁剪/填充
+                    fixed_img = center_crop_or_pad(normalized_img, TARGET_SHAPE)
 
-                fixed_img = center_crop_or_pad(normalized_img, TARGET_SHAPE)
+                    # 4. 保存
+                    out_name = f"case_{case_id_str}_{seq_id}.nii.gz"
+                    out_path = out_root / output_class_dir / str(seq_id) / out_name
 
-                out_name = f"case_{case_id}_{seq_id}.nii.gz"
-                out_path = out_root / label_name / str(seq_id) / out_name
+                    if not out_path.exists():
+                        save_image(fixed_img, out_path)
+                
+                except Exception as e:
+                    print(f"Error processing {nii_file}: {e}")
+                    continue
 
-                if not out_path.exists():
-                    save_image(fixed_img, out_path)
-
-    # ===== 处理脑膜炎 =====
-    meningitis_cases = collect_cases(meningitis_dirs)
-    process_cases(meningitis_cases, "1_meningitis", "Processing meningitis cases")
-
-    # ===== 处理正常 =====
-    normal_cases = collect_cases(normal_dirs)
-    process_cases(normal_cases, "0_normal", "Processing normal cases")
-
-    # ===== 保存 index =====
+    # ===== 保存索引 =====
     save_index(case_index, index_path)
 
     print(f"Finished. Total cases indexed: {max_case_id}")
@@ -106,13 +141,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--raw_root",
         type=str,
-        default=RAW_DATA_PATH,
+        default=str(RAW_DATA_PATH), # 适配 Path 对象转 str
         help="Path to raw brainMRI directory"
     )
     parser.add_argument(
         "--out_root",
         type=str,
-        default=PROCESSED_DATA_PATH,
+        default=str(PROCESSED_DATA_PATH), # 适配 Path 对象转 str
         help="Output processed data directory"
     )
     args = parser.parse_args()
