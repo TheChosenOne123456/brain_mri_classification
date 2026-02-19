@@ -7,6 +7,10 @@ import re
 from pathlib import Path
 from tqdm import tqdm
 
+import SimpleITK as sitk
+# [新增] 关闭 SimpleITK 的底层警告输出，防止刷屏
+sitk.ProcessObject_SetGlobalWarningDisplay(False)
+
 from configs.global_config import *
 
 from utils.sequences import identify_sequence
@@ -111,6 +115,9 @@ def main(args):
                     # ===== 图像处理流程 (完全复刻) =====
                     # 1. 重采样
                     resampled_img = resample_image(nii_file, target_spacing=TARGET_SPACING, is_label=False)
+                    if resampled_img is None:
+                        tqdm.write(f"[Warning] Failed to load/resample file: {nii_file.resolve()} | ID: {case_id_str}")
+                        continue
                     
                     # 2. 强度归一化
                     normalized_img = normalize_intensity(resampled_img)
@@ -126,7 +133,8 @@ def main(args):
                         save_image(fixed_img, out_path)
                 
                 except Exception as e:
-                    print(f"Error processing {nii_file}: {e}")
+                    # 其他 Python 错误
+                    tqdm.write(f"\n[Error] Unknown error processing {nii_file}: {e}")
                     continue
 
     # ===== 保存索引 =====

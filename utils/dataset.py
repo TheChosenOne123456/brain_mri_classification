@@ -54,18 +54,26 @@ def collect_cases_by_seq(seq_id: int):
     """
     cases = {}
 
-    for label, label_dir in [(0, "0_normal"), (1, "1_meningitis")]:
-        seq_dir = Path(PROCESSED_DATA_PATH) / label_dir / str(seq_id)
+    for label_id, label_name in enumerate(CLASS_NAMES):
+        dir_name = f"{label_id}_{label_name}"
+        
+        seq_dir = PROCESSED_DATA_PATH / dir_name / str(seq_id)
+        
         if not seq_dir.exists():
             continue
 
+        # 遍历该目录下的所有 case 文件
+        # 文件名格式: case_{case_id}_{seq_id}.nii.gz
         for nii_file in seq_dir.glob(f"case_*_{seq_id}.nii.gz"):
-            case_id = nii_file.name.split("_")[1]
-            cases[case_id] = {
-                "case_id": case_id,
-                "nii_path": nii_file,
-                "label": label
-            }
+            # 解析 case_id (文件名格式为 case_0001_1.nii.gz)
+            parts = nii_file.name.split("_")
+            if len(parts) >= 2:
+                case_id = parts[1]
+                cases[case_id] = {
+                    "case_id": case_id,
+                    "nii_path": nii_file,
+                    "label": label_id  # 自动通过 enumerate 获取 0, 1, 2...
+                }
 
     return cases
 

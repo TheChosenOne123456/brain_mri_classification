@@ -2,7 +2,13 @@ import SimpleITK as sitk
 from pathlib import Path
 
 def resample_image(img_path, target_spacing=(1.0, 1.0, 1.0), is_label=False):
-    img = sitk.ReadImage(str(img_path))
+    try:
+        # 尝试读取图像
+        img = sitk.ReadImage(str(img_path))
+    except Exception:
+        # 捕获所有读取错误（包括格式不支持、文件损坏等）
+        # 返回 None 表示失败
+        return None
 
     # ---- 4D 处理（你已有的逻辑）----
     if img.GetDimension() == 4:

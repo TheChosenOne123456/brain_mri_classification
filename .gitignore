@@ -6,4 +6,4 @@ output_texts/
 inference_outputs/
 train_command.sh
 eval_command.sh
-quick_commands.sh
+quick_command.sh
