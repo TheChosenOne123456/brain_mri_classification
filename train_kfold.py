@@ -7,6 +7,7 @@ import argparse
 import sys
 import torch
 import torch.nn as nn
+from sklearn.metrics import f1_score
 # 引入 AMP 模块 (兼容新旧版本写法)
 try:
     from torch.amp import GradScaler, autocast
@@ -88,7 +89,21 @@ def main(args):
         print(f"Using {torch.cuda.device_count()} GPUs!")
         model = nn.DataParallel(model)
 
-    criterion = nn.CrossEntropyLoss()
+    all_labels = train_set.labels.tolist()
+    class_counts = torch.bincount(torch.tensor(all_labels), minlength=NUM_CLASSES)
+    
+    # 避免除以 0 (虽然理论上不会有空类)
+    total_samples = len(all_labels)
+    raw_weights = total_samples / (NUM_CLASSES * class_counts.float() + 1e-6)
+    class_weights = torch.pow(raw_weights, 0.5)
+    
+    # 将权重转到 device
+    class_weights = class_weights.to(DEVICE)
+    
+    print(f"Class Weights: {class_weights}") # 打印出来确认一下
+
+    # [修改] 使用加权 CrossEntropyLoss
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
     optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
 
     # 初始化混合精度 Scaler (使用兼容写法)
@@ -96,6 +111,7 @@ def main(args):
 
     # 训练循环 &早停
     best_val_loss = float("inf")
+    best_val_f1 = 0.0  # 初始化为 0，越大越好
     patience_counter = 0
     best_epoch = 0
 
@@ -145,6 +161,11 @@ def main(args):
         val_loss = 0.0
         val_correct = 0
         val_total = 0
+
+        # 收集预测结果和真实标签
+        all_preds = []
+        all_targets = []
+
         with torch.no_grad():
             for x, y, _ in val_loader:
                 x, y = x.to(DEVICE), y.to(DEVICE)
@@ -161,19 +182,27 @@ def main(args):
                 
                 val_loss += loss.item()
                 _, predicted = torch.max(logits.data, 1)
+
+                all_preds.extend(predicted.cpu().numpy())
+                all_targets.extend(y.cpu().numpy())
+
                 val_total += y.size(0)
                 val_correct += (predicted == y).sum().item()
         
         val_loss /= len(val_loader)
         val_acc = val_correct / val_total
 
+        # [新增] 计算 Macro F1
+        val_f1 = f1_score(all_targets, all_preds, average='macro', zero_division=0)
+
         # --- 打印格式 ---
         print(f"Epoch [{epoch}/{NUM_EPOCHS}] "
               f"train_loss: {train_loss:.4f} | train_acc: {train_acc:.4f}   "
-              f"val_loss: {val_loss:.4f} | val_acc: {val_acc:.4f}")
+              f"val_loss: {val_loss:.4f} | val_acc: {val_acc:.4f} | val_f1: {val_f1:.4f}")
 
         # --- Early Stopping check with MIN_EPOCHS ---
-        if val_loss < best_val_loss:
+        if val_f1 > best_val_f1:
+            best_val_f1 = val_f1
             best_val_loss = val_loss
             patience_counter = 0
             best_epoch = epoch
@@ -186,7 +215,8 @@ def main(args):
                 "fold": current_fold,
                 "epoch": epoch,
                 "val_loss": best_val_loss,
-                "val_acc": val_acc
+                "val_acc": val_acc,
+                "val_f1": val_f1 # 新增记录
             }, best_model_path)
             # 即使在 MIN_EPOCHS 内，也保存更好的模型
         else:
@@ -195,7 +225,7 @@ def main(args):
                 patience_counter += 1
                 if patience_counter >= PATIENCE:
                     print(f"\n[Early Stopping] Fold {current_fold} at epoch {epoch}. "
-                          f"Best Val Loss: {best_val_loss:.4f} (Ep {best_epoch})")
+                          f"Best Val F1: {best_val_f1:.4f} (Ep {best_epoch})")
                     break
             else:
                  # 保护期内，重置耐心，确保出了保护期是满血状态

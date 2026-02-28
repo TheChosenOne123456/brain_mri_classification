@@ -115,9 +115,9 @@ def evaluate_single_fold(seq_idx, model_name, fold_idx, ModelClass):
 
     # ---------- 计算指标 ----------
     acc = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, zero_division=0)
-    recall = recall_score(all_labels, all_preds, zero_division=0)
-    f1 = f1_score(all_labels, all_preds, zero_division=0)
+    precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+    recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+    f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
     cm = confusion_matrix(all_labels, all_preds)
 
     # ---------- 打印结果 (保持与 eval.py 格式一致) ----------
@@ -138,7 +138,7 @@ def evaluate_single_fold(seq_idx, model_name, fold_idx, ModelClass):
         classification_report(
             all_labels,
             all_preds,
-            target_names=["Class 0", "Class 1"],
+            target_names=CLASS_NAMES,
             digits=4,
             zero_division=0,
         )
