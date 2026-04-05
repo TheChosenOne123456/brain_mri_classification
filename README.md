@@ -145,14 +145,32 @@ python -m scripts.build_dataset_kfold
 项目采用的模型总体是ResNet10，但是在ResNet10的基础上有一些改进：
 1. 小 batch 场景下的归一化重设计（BN→IN）：针对 3D MRI 显存受限导致的极小 batch 训练不稳定，提出实例级归一化方案以提升收敛稳定性与泛化。在 BasicBlock 和 shortcut 中统一使用 InstanceNorm3d(affine=True)，减少小批量统计噪声问题。
 ```python
-self.bn1 = nn.InstanceNorm3d(planes, affine=True)
-self.bn2 = nn.InstanceNorm3d(planes, affine=True)
-...
-nn.InstanceNorm3d(self.expansion * planes, affine=True)
+def _replace_bn3d_with_in3d(self, module: nn.Module):
+    for name, child in module.named_children():
+        if isinstance(child, nn.BatchNorm3d):
+            inorm = nn.InstanceNorm3d(
+                child.num_features,
+                eps=child.eps,
+                affine=True,
+                track_running_stats=False,
+            )
+            # 可选：拷贝 affine 参数，减少突变
+            with torch.no_grad():
+                if child.weight is not None:
+                    inorm.weight.copy_(child.weight)
+                if child.bias is not None:
+                    inorm.bias.copy_(child.bias)
+            setattr(module, name, inorm)
+        else:
+            self._replace_bn3d_with_in3d(child)
 ```
-2. 保细节的输入 stem 设计（3×3×3, stride=1）：为避免早期下采样破坏小病灶/薄层结构，采用高分辨率 stem 保留解剖细节。把标准 ResNet 的激进下采样 stem 改成了不降采样的 3D 卷积，且没有 early maxpool。
+2. 采用官方提供的预训练模型，预训练模型的结构是r3d_18，权重是R3D_18_Weights。迁移学习具有如下优势：
+  - 提高模型性能：预训练模型已经学到了：“边缘、纹理、结构”和“空间 + 时间特征”。
+  - 加快训练速度：一开始就在“比较合理的参数空间”。
+  - 提高泛化能力：预训练模型是在大规模数据上训练的，相当于给模型加了“先验知识”。
 ```python
-self.conv1 = nn.Conv3d(in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False)
+weights = R3D_18_Weights.DEFAULT if use_pretrained else None
+model = r3d_18(weights=weights)
 ```
 3. 实现晚期融合的多模态模型：先单独训练三个序列的分类模型，每个模型最后会输出一个prob，将这个prob取平均值，实现软投票（decision-level soft voting）机制。由于不同序列容易提取的特征有所不同，晚期融合使每个分支模型重点学习对应序列特征（专家模型），避免单模型里多模态通道竞争导致的特征稀释。该策略在保留模态特异性判别能力的同时，利用跨模态互补信息提升了分类鲁棒性与泛化性能。
 
@@ -160,138 +178,119 @@ self.conv1 = nn.Conv3d(in_channels, 64, kernel_size=3, stride=1, padding=1, bias
 ```python
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+from torchvision.models.video import r3d_18, R3D_18_Weights
 
 
-class BasicBlock(nn.Module):
+# 固定在模型文件内的配置（非构造参数）
+FOUNDATION_BACKBONE_NAME = "official_r3d18"
+FOUNDATION_USE_PRETRAINED = True
+FOUNDATION_DROPOUT = 0.0
+
+
+class FoundationModel(nn.Module):
     """
-    ResNet 的基本残差块 (Basic Residual Block)
-    包含两个 3x3x3 卷积层和一条 Shortcut 连接
+    可扩展“壳子”：
+    - backbone: 当前仅支持 official_r3d18（官方预训练）
+    - neck: 预留（默认 Identity）
+    - head: 分类头（可替换）
+    - aux_heads: 预留多任务/蒸馏/对比学习头
     """
-    expansion = 1
+    def __init__(
+        self,
+        num_classes: int = 3,
+        in_channels: int = 1,
+    ):
+        super().__init__()
+        self.backbone_name = FOUNDATION_BACKBONE_NAME
+        self.in_channels = in_channels
 
-    def __init__(self, in_planes, planes, stride=1):
-        super(BasicBlock, self).__init__()
-        
-        # 第一层卷积：如果 stride > 1，在这里进行下采样
-        self.conv1 = nn.Conv3d(
-            in_planes, planes, kernel_size=3, stride=stride, padding=1, bias=False
+        self.backbone, feat_dim = self._build_backbone(
+            FOUNDATION_BACKBONE_NAME,
+            FOUNDATION_USE_PRETRAINED,
+            in_channels
         )
-        # 使用 InstanceNorm3d 代替 BatchNorm3d
-        # 原因：你的 Batch Size = 2，BN 的统计量会非常不稳定，导致训练困难。
-        # IN 对 Batch Size 不敏感，是 3D 医学图像任务的首选。
-        # affine=True 让 IN 层拥有可学习的参数 (gamma, beta)
-        self.bn1 = nn.InstanceNorm3d(planes, affine=True)
-        
-        # 第二层卷积：保持尺寸不变
-        self.conv2 = nn.Conv3d(
-            planes, planes, kernel_size=3, stride=1, padding=1, bias=False
-        )
-        self.bn2 = nn.InstanceNorm3d(planes, affine=True)
+        self.neck = self._build_neck(feat_dim)   # 预留创新点1
+        self.head = self._build_head(feat_dim, num_classes, FOUNDATION_DROPOUT)
+        self.aux_heads = nn.ModuleDict()         # 预留创新点2
 
-        # Shortcut (跳跃连接)
-        # 如果输入输出维度不一致（stride!=1 或通道数改变），需要用 1x1 卷积调整 x 的形状
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != self.expansion * planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv3d(
-                    in_planes, self.expansion * planes, 
-                    kernel_size=1, stride=stride, bias=False
-                ),
-                nn.InstanceNorm3d(self.expansion * planes, affine=True)
+    # ===== 可扩展点：backbone =====
+    def _build_backbone(self, backbone_name: str, use_pretrained: bool, in_channels: int):
+        if backbone_name == "official_r3d18":
+            weights = R3D_18_Weights.DEFAULT if use_pretrained else None
+            model = r3d_18(weights=weights)
+
+            # [新增] 仅做 BN -> IN
+            self._replace_bn3d_with_in3d(model)
+
+            # 适配输入通道（MRI 常见 1 通道）
+            if in_channels == 1:
+                model.stem[0] = self._adapt_first_conv_to_1ch(model.stem[0])
+            elif in_channels != 3:
+                raise ValueError("official_r3d18 仅支持 in_channels=1 或 3")
+
+            feat_dim = model.fc.in_features
+            model.fc = nn.Identity()  # 把分类头拆掉，交给壳子自己的 head
+            return model, feat_dim
+
+        raise ValueError(f"Unsupported backbone: {backbone_name}")
+    
+    def _replace_bn3d_with_in3d(self, module: nn.Module):
+        for name, child in module.named_children():
+            if isinstance(child, nn.BatchNorm3d):
+                inorm = nn.InstanceNorm3d(
+                    child.num_features,
+                    eps=child.eps,
+                    affine=True,
+                    track_running_stats=False,
+                )
+                # 可选：拷贝 affine 参数，减少突变
+                with torch.no_grad():
+                    if child.weight is not None:
+                        inorm.weight.copy_(child.weight)
+                    if child.bias is not None:
+                        inorm.bias.copy_(child.bias)
+                setattr(module, name, inorm)
+            else:
+                self._replace_bn3d_with_in3d(child)
+
+    # ===== 可扩展点：neck =====
+    def _build_neck(self, feat_dim: int):
+        # 后续可替换为 attention / adapter / projector
+        return nn.Identity()
+
+    # ===== 可扩展点：head =====
+    def _build_head(self, feat_dim: int, num_classes: int, dropout: float):
+        if dropout > 0:
+            return nn.Sequential(
+                nn.Dropout(p=dropout),
+                nn.Linear(feat_dim, num_classes),
             )
+        return nn.Linear(feat_dim, num_classes)
 
-    def forward(self, x):
-        # 主路径
-        out = F.relu(self.bn1(self.conv1(x)))
-        out = self.bn2(self.conv2(out))
-        
-        # 残差连接：F(x) + x
-        # 这让梯度可以直接流向浅层，解决了深层网络难以训练的问题
-        out += self.shortcut(x)
-        
-        out = F.relu(out)
-        return out
-
-
-class ResNet(nn.Module):
-    def __init__(self, block, num_blocks, num_classes=2, in_channels=1):
-        super(ResNet, self).__init__()
-        self.in_planes = 64
-
-        # ================== 初始层 ==================
-        # 标准 ResNet 使用 7x7 stride=2，但对于 MRI（特别是 Z 轴层数较少时），
-        # 过早的下采样会丢失细节。这里改用 3x3 stride=1 保留分辨率。
-        self.conv1 = nn.Conv3d(
-            in_channels, 64, kernel_size=3, stride=1, padding=1, bias=False
+    def _adapt_first_conv_to_1ch(self, conv3d: nn.Conv3d):
+        new_conv = nn.Conv3d(
+            in_channels=1,
+            out_channels=conv3d.out_channels,
+            kernel_size=conv3d.kernel_size,
+            stride=conv3d.stride,
+            padding=conv3d.padding,
+            bias=(conv3d.bias is not None),
         )
-        self.bn1 = nn.InstanceNorm3d(64, affine=True)
-        
-        # ================== 残差层 (Layer 1-4) ==================
-        # Layer 1: 64通道，不降采样
-        self.layer1 = self._make_layer(block, 64, num_blocks[0], stride=1)
-        # Layer 2: 128通道，降采样 (stride=2)
-        self.layer2 = self._make_layer(block, 128, num_blocks[1], stride=2)
-        # Layer 3: 256通道，降采样 (stride=2)
-        self.layer3 = self._make_layer(block, 256, num_blocks[2], stride=2)
-        # Layer 4: 512通道，降采样 (stride=2)
-        self.layer4 = self._make_layer(block, 512, num_blocks[3], stride=2)
+        with torch.no_grad():
+            new_conv.weight.copy_(conv3d.weight.mean(dim=1, keepdim=True))
+            if conv3d.bias is not None:
+                new_conv.bias.copy_(conv3d.bias)
+        return new_conv
 
-        # ================== 分类头 ==================
-        # 全局平均池化：无论输入尺寸多大，都压缩成 1x1x1
-        self.avgpool = nn.AdaptiveAvgPool3d((1, 1, 1))
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
-
-        # 权重初始化
-        for m in self.modules():
-            if isinstance(m, nn.Conv3d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-            elif isinstance(m, (nn.BatchNorm3d, nn.InstanceNorm3d, nn.GroupNorm)):
-                if m.weight is not None:
-                    nn.init.constant_(m.weight, 1)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-
-    def _make_layer(self, block, planes, num_blocks, stride):
-        strides = [stride] + [1] * (num_blocks - 1)
-        layers = []
-        for stride in strides:
-            layers.append(block(self.in_planes, planes, stride))
-            self.in_planes = planes * block.expansion
-        return nn.Sequential(*layers)
+    def forward_features(self, x):
+        feat = self.backbone(x)   # [B, feat_dim]
+        feat = self.neck(feat)
+        return feat
 
     def forward(self, x):
-        # x: [B, 1, D, H, W]
-        
-        out = F.relu(self.bn1(self.conv1(x)))
-        
-        out = self.layer1(out) # [B, 64, D, H, W]
-        out = self.layer2(out) # [B, 128, D/2, H/2, W/2]
-        out = self.layer3(out) # [B, 256, D/4, H/4, W/4]
-        out = self.layer4(out) # [B, 512, D/8, H/8, W/8]
-
-        out = self.avgpool(out) # [B, 512, 1, 1, 1]
-        out = out.flatten(1)    # [B, 512]
-        
-        return self.fc(out)
-
-
-# ================== 快捷入口 ==================
-
-def ResNet10(num_classes=2, in_channels=1):
-    """
-    ResNet-10: 较浅的网络，适合数据量较少的情况
-    结构: [1, 1, 1, 1] 个 Block
-    """
-    return ResNet(BasicBlock, [1, 1, 1, 1], num_classes=num_classes, in_channels=in_channels)
-
-def ResNet18(num_classes=2, in_channels=1):
-    """
-    ResNet-18: 标准轻量级 ResNet
-    结构: [2, 2, 2, 2] 个 Block
-    """
-    return ResNet(BasicBlock, [2, 2, 2, 2], num_classes=num_classes, in_channels=in_channels)
-
+        feat = self.forward_features(x)
+        logits = self.head(feat)
+        return logits
 ```
 
 #### 训练过程
@@ -378,191 +377,194 @@ python eval_kfold.py --seq 3 --model ResNet
 
 ### 最优模型
 
-目前在三个序列上分别训练了单模态改良后ResNet10模型，最优模型是将三个模型的输出软投票，得到的多模态晚期融合模型。模型在测试集上的表现如下：
+目前在三个序列上分别用“迁移学习”的方式训练了单模态预训练ResNet10模型（FoundationModel），最优模型是将三个模型的输出软投票，得到的多模态晚期融合模型。模型在测试集上的表现如下：
 ```bash
+(BrainMRIClassification) ailab@ailab:~/projects/brain_mri_classification$ python eval_vote_kfold.py --model FoundationMode
+l
+
 >>> Starting K-Fold Evaluation for: Late Fusion Soft Voting <<<
 Mode: All 5 Folds Average
 
 ==================== Evaluating Fold 1 ====================
-Mode: Late Fusion (Soft Voting) | Model: ResNet
-  -> Loading test sets for all 3 sequences... Done in 72.3s
+Mode: Late Fusion (Soft Voting) | Model: FoundationModel
+  -> Loading test sets for all 3 sequences... Done in 95.4s
   -> Successfully loaded 3 models (T1, T2, FLAIR).
 
 ===== Test Results =====
 Sequence      : ALL (Soft Voting) (Fold 1)
 Test samples  : 746
-Accuracy      : 0.8566
-Precision     : 0.8255
-Recall        : 0.7745
-F1-score      : 0.7892
+Accuracy      : 0.9048
+Precision     : 0.9063
+Recall        : 0.8424
+F1-score      : 0.8706
 
 Confusion Matrix:
-[[ 77  10   2]
- [ 17 494  15]
- [  2  61  68]]
+[[ 78  11   0]
+ [  3 507  16]
+ [  0  41  90]]
 
 Classification Report:
               precision    recall  f1-score   support
 
-      normal     0.8021    0.8652    0.8324        89
-inflammation     0.8743    0.9392    0.9056       526
-  metastasis     0.8000    0.5191    0.6296       131
+      normal     0.9630    0.8764    0.9176        89
+inflammation     0.9070    0.9639    0.9346       526
+  metastasis     0.8491    0.6870    0.7595       131
 
-    accuracy                         0.8566       746
-   macro avg     0.8255    0.7745    0.7892       746
-weighted avg     0.8527    0.8566    0.8484       746
+    accuracy                         0.9048       746
+   macro avg     0.9063    0.8424    0.8706       746
+weighted avg     0.9035    0.9048    0.9018       746
 
 
 ===== Misclassified Cases =====
-Total misclassified: 107
+Total misclassified: 71
 CaseID: 0015 | GT: 0 | Pred: 1
-CaseID: 0033 | GT: 0 | Pred: 2
-CaseID: 0215 | GT: 0 | Pred: 1
+CaseID: 0062 | GT: 0 | Pred: 1
+CaseID: 0219 | GT: 0 | Pred: 1
 ...
 
 ==================== Evaluating Fold 2 ====================
-Mode: Late Fusion (Soft Voting) | Model: ResNet
-  -> Loading test sets for all 3 sequences... Done in 91.2s
+Mode: Late Fusion (Soft Voting) | Model: FoundationModel
+  -> Loading test sets for all 3 sequences... Done in 137.9s
   -> Successfully loaded 3 models (T1, T2, FLAIR).
 
 ===== Test Results =====
 Sequence      : ALL (Soft Voting) (Fold 2)
 Test samples  : 746
-Accuracy      : 0.8794
-Precision     : 0.8313
-Recall        : 0.8206
-F1-score      : 0.8225
+Accuracy      : 0.9196
+Precision     : 0.8969
+Recall        : 0.8768
+F1-score      : 0.8834
 
 Confusion Matrix:
-[[ 58   4   0]
- [  7 524  27]
- [  3  49  74]]
+[[ 60   2   0]
+ [  6 538  14]
+ [  1  37  88]]
 
 Classification Report:
               precision    recall  f1-score   support
 
-      normal     0.8529    0.9355    0.8923        62
-inflammation     0.9081    0.9391    0.9233       558
-  metastasis     0.7327    0.5873    0.6520       126
+      normal     0.8955    0.9677    0.9302        62
+inflammation     0.9324    0.9642    0.9480       558
+  metastasis     0.8627    0.6984    0.7719       126
 
-    accuracy                         0.8794       746
-   macro avg     0.8313    0.8206    0.8225       746
-weighted avg     0.8739    0.8794    0.8749       746
+    accuracy                         0.9196       746
+   macro avg     0.8969    0.8768    0.8834       746
+weighted avg     0.9176    0.9196    0.9168       746
 
 
 ===== Misclassified Cases =====
-Total misclassified: 90
+Total misclassified: 60
 CaseID: 0136 | GT: 0 | Pred: 1
 CaseID: 0164 | GT: 0 | Pred: 1
-CaseID: 0169 | GT: 0 | Pred: 1
+CaseID: 0676 | GT: 1 | Pred: 2
 ...
 
 ==================== Evaluating Fold 3 ====================
-Mode: Late Fusion (Soft Voting) | Model: ResNet
-  -> Loading test sets for all 3 sequences... Done in 85.8s
+Mode: Late Fusion (Soft Voting) | Model: FoundationModel
+  -> Loading test sets for all 3 sequences... Done in 157.8s
   -> Successfully loaded 3 models (T1, T2, FLAIR).
 
 ===== Test Results =====
 Sequence      : ALL (Soft Voting) (Fold 3)
 Test samples  : 745
-Accuracy      : 0.8564
-Precision     : 0.8163
-Recall        : 0.8220
-F1-score      : 0.8184
+Accuracy      : 0.9074
+Precision     : 0.9048
+Recall        : 0.8590
+F1-score      : 0.8788
 
 Confusion Matrix:
-[[ 67   3   1]
- [  6 484  42]
- [  3  52  87]]
+[[ 66   5   0]
+ [  1 513  18]
+ [  2  43  97]]
 
 Classification Report:
               precision    recall  f1-score   support
 
-      normal     0.8816    0.9437    0.9116        71
-inflammation     0.8980    0.9098    0.9038       532
-  metastasis     0.6692    0.6127    0.6397       142
+      normal     0.9565    0.9296    0.9429        71
+inflammation     0.9144    0.9643    0.9387       532
+  metastasis     0.8435    0.6831    0.7549       142
 
-    accuracy                         0.8564       745
-   macro avg     0.8163    0.8220    0.8184       745
-weighted avg     0.8528    0.8564    0.8542       745
+    accuracy                         0.9074       745
+   macro avg     0.9048    0.8590    0.8788       745
+weighted avg     0.9049    0.9074    0.9041       745
 
 
 ===== Misclassified Cases =====
-Total misclassified: 107
+Total misclassified: 69
 CaseID: 0007 | GT: 0 | Pred: 1
-CaseID: 0129 | GT: 0 | Pred: 2
-CaseID: 0143 | GT: 0 | Pred: 1
+CaseID: 0084 | GT: 0 | Pred: 1
+CaseID: 0129 | GT: 0 | Pred: 1
 ...
 
 ==================== Evaluating Fold 4 ====================
-Mode: Late Fusion (Soft Voting) | Model: ResNet
-  -> Loading test sets for all 3 sequences... Done in 56.3s
+Mode: Late Fusion (Soft Voting) | Model: FoundationModel
+  -> Loading test sets for all 3 sequences... Done in 144.4s
   -> Successfully loaded 3 models (T1, T2, FLAIR).
 
 ===== Test Results =====
 Sequence      : ALL (Soft Voting) (Fold 4)
 Test samples  : 745
-Accuracy      : 0.8779
-Precision     : 0.8422
-Recall        : 0.8153
-F1-score      : 0.8279
+Accuracy      : 0.9195
+Precision     : 0.9208
+Recall        : 0.8521
+F1-score      : 0.8827
 
 Confusion Matrix:
-[[ 74   8   3]
- [  8 501  28]
- [  0  44  79]]
+[[ 73  11   1]
+ [  3 523  11]
+ [  0  34  89]]
 
 Classification Report:
               precision    recall  f1-score   support
 
-      normal     0.9024    0.8706    0.8862        85
-inflammation     0.9060    0.9330    0.9193       537
-  metastasis     0.7182    0.6423    0.6781       123
+      normal     0.9605    0.8588    0.9068        85
+inflammation     0.9208    0.9739    0.9466       537
+  metastasis     0.8812    0.7236    0.7946       123
 
-    accuracy                         0.8779       745
-   macro avg     0.8422    0.8153    0.8279       745
-weighted avg     0.8746    0.8779    0.8757       745
+    accuracy                         0.9195       745
+   macro avg     0.9208    0.8521    0.8827       745
+weighted avg     0.9188    0.9195    0.9170       745
 
 
 ===== Misclassified Cases =====
-Total misclassified: 91
+Total misclassified: 60
 CaseID: 0028 | GT: 0 | Pred: 2
-CaseID: 0056 | GT: 0 | Pred: 1
-CaseID: 0078 | GT: 0 | Pred: 2
+CaseID: 0078 | GT: 0 | Pred: 1
+CaseID: 0118 | GT: 0 | Pred: 1
 ...
 
 ==================== Evaluating Fold 5 ====================
-Mode: Late Fusion (Soft Voting) | Model: ResNet
-  -> Loading test sets for all 3 sequences... Done in 44.7s
+Mode: Late Fusion (Soft Voting) | Model: FoundationModel
+  -> Loading test sets for all 3 sequences... Done in 155.8s
   -> Successfully loaded 3 models (T1, T2, FLAIR).
 
 ===== Test Results =====
 Sequence      : ALL (Soft Voting) (Fold 5)
 Test samples  : 745
-Accuracy      : 0.8456
-Precision     : 0.8419
-Recall        : 0.7781
-F1-score      : 0.8059
+Accuracy      : 0.8832
+Precision     : 0.9134
+Recall        : 0.8023
+F1-score      : 0.8450
 
 Confusion Matrix:
-[[ 48  10   0]
- [  2 490  36]
- [  1  66  92]]
+[[ 49   9   0]
+ [  0 516  12]
+ [  1  65  93]]
 
 Classification Report:
               precision    recall  f1-score   support
 
-      normal     0.9412    0.8276    0.8807        58
-inflammation     0.8657    0.9280    0.8958       528
-  metastasis     0.7188    0.5786    0.6411       159
+      normal     0.9800    0.8448    0.9074        58
+inflammation     0.8746    0.9773    0.9231       528
+  metastasis     0.8857    0.5849    0.7045       159
 
-    accuracy                         0.8456       745
-   macro avg     0.8419    0.7781    0.8059       745
-weighted avg     0.8402    0.8456    0.8403       745
+    accuracy                         0.8832       745
+   macro avg     0.9134    0.8023    0.8450       745
+weighted avg     0.8852    0.8832    0.8752       745
 
 
 ===== Misclassified Cases =====
-Total misclassified: 115
+Total misclassified: 87
 CaseID: 0017 | GT: 0 | Pred: 1
 CaseID: 0051 | GT: 0 | Pred: 1
 CaseID: 0123 | GT: 0 | Pred: 1
@@ -572,13 +574,13 @@ CaseID: 0123 | GT: 0 | Pred: 1
    K-FOLDS AVERAGE REPORT (5 folds)   
 ==================================================
 Method        : Late Fusion Soft Voting
-Model         : ResNet
+Model         : FoundationModel
 ----------------------------------------
 Metric          | Mean       | Std       
 ----------------------------------------
-Accuracy        | 0.8632     | ±0.0132
-Precision       | 0.8314     | ±0.0099
-Recall          | 0.8021     | ±0.0212
-F1-Score        | 0.8128     | ±0.0138
+Accuracy        | 0.9069     | ±0.0133
+Precision       | 0.9085     | ±0.0081
+Recall          | 0.8465     | ±0.0248
+F1-Score        | 0.8721     | ±0.0143
 ----------------------------------------
 ```

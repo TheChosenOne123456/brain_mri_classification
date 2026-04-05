@@ -24,6 +24,7 @@ from configs.train_config import *
 from configs.global_config import *
 from models.cnn3d import Simple3DCNN
 from models.ResNet import ResNet10, ResNet18
+from models.FoundationModel import FoundationModel
 from utils.train_and_test import set_seed, load_pt_dataset
 
 import warnings
@@ -140,6 +141,8 @@ def main(args):
         ModelClass = ResNet10
     elif model_name == "ResNet18":
         ModelClass = ResNet18
+    elif model_name == "FoundationModel":
+        ModelClass = FoundationModel
     else:
         raise ValueError(f"Unknown model: {model_name}")
 
@@ -302,7 +305,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # [修改] required=False 表示如果命令行不打 --seq 就是多通道
     parser.add_argument("--seq", type=int, required=False, default=None, help="Sequence ID (1-3). Leave empty for ALL channels.")
-    parser.add_argument("--model", type=str, required=True, choices=["cnn3d", "ResNet", "ResNet18"])
+    parser.add_argument("--model", type=str, required=True, choices=["cnn3d", "ResNet", "ResNet18", "FoundationModel"])
     parser.add_argument("--fold", type=int, required=True, choices=range(1, K_FOLDS + 1), help=f"Fold ID (1-{K_FOLDS})")
     args = parser.parse_args()
     
